@@ -1,0 +1,192 @@
+install.packages("remotes")
+remotes::install_github('ewenme/understatr')
+library(understatr)
+install.packages("reshape")
+install.packages("dplyr")
+install.packages("ggthemes")
+install.packages("lemon")
+
+understatr::
+
+#Premier League beolvasása 2019-ről.
+pladatok2018 <- get_league_teams_stats("EPL", "2018")  
+  
+#Premier League beolvasása 2019-ről.
+pladatok2019 <- get_league_teams_stats("EPL", "2019")
+
+#Premier League beolvasása 2020ről.
+pladatok2020 <- get_league_teams_stats("EPL", "2020")
+
+# A 3 Dateframe összeolvasztása (1 teljesen covid | 50-50% covid | 1 covid)
+
+df_list <- list(pladatok2018, pladatok2019, pladatok2020)
+library(reshape)
+merged_pl <- merge_recurse(df_list)
+
+# A felesleges adatok leválasztása a Dataframeről
+
+library(dplyr)
+
+data <- select(merged_pl,h_a, result, date, team_name, league_name, year)
+
+# Csak a hazai meccsek választásra
+
+final_data <- filter(data, h_a == "h")
+
+# Covid oszlop felvétele:
+
+final_data <- mutate(final_data, covid = date > as.Date('2020-03-10'))
+final_data$covid
+
+# Milyen adattípusok vannak a dataframaben:
+
+str(final_data)
+
+# Vizsgáljuk hogy a korlátozások előtt / alatt van az adott meccs. 
+# Ha TRUE--> Akkor voltak nézők, Ha FALSE --> Nem voltak nézők.
+  
+final_data$covid <- ifelse(final_data$date > as.Date('2020-03-10'), FALSE, TRUE)
+
+#Csapatonkénti bontás
+
+teams <- final_data %>%
+  group_by(team_name, covid, result) %>%
+  count()
+
+# W/L/D szétbontva
+
+
+covid_true <- filter(final_data, covid == "TRUE")
+covid_false <- filter(final_data, covid == "FALSE")
+
+winrate_covid <- covid_true %>%
+  group_by(result) %>%
+  count()
+
+winrate_noncovid <- covid_false %>%
+  group_by(result) %>%
+  count()
+
+# Adatvizualizáció
+
+#AMNC -> All Home Matches with COVID
+#AHCT -> All Home Matches without COVID
+
+# Sum összes meccs
+
+AMCT <- sum(winrate_covid$n)
+AMNC <- sum(winrate_noncovid$n)
+
+# Győzelmek változóba foglalása
+
+winrate_percent_WOC <- winrate_covid$n[3]
+winrate_percent_COVID <- winrate_noncovid$n[3]
+
+WIN_WOC <- winrate_percent_WOC / AMCT
+WIN_COVID <- winrate_percent_COVID / AMNC
+
+
+
+tmp <- data.frame(
+  Period = c("PRE COVID-19 WIN%", "POST COVID-19 WIN%"),
+  winrate = c(WIN_WOC, WIN_COVID)
+)
+print(tmp)
+
+# Vizualizáció
+
+library(ggplot2)
+theme_set(theme_bw())
+ggplot(tmp, aes(x = Period, y = winrate)) +
+  geom_bar(stat="identity", width=0.1, fill=("red")) +
+  labs(title="HOME WIN-RATIO ANALYSIS", 
+       subtitle="Pre vs Post COVID-19",
+       caption="Source: understatr.com") +
+  theme(legend.position="none")
+
+# Liverpool WinRate 
+
+
+post_liverpool <- subset(covid_false, (team_name == 'Liverpool'))
+pre_liverpool <- subset(covid_true, (team_name == 'Liverpool'))
+
+post_liverpool_wr <- post_liverpool %>%
+  group_by(result) %>%
+  count()
+
+pre_liverpool_wr <- pre_liverpool %>%
+  group_by(result) %>%
+  count()
+
+
+l_post <- post_liverpool_wr$n[3] / sum(post_liverpool_wr$n)
+l_pre <- pre_liverpool_wr$n[2] / sum(pre_liverpool_wr$n)
+
+
+tmp2 <- data.frame(
+  Period2 = c("PRE COVID-19 WIN%", "POST COVID-19 WIN%"),
+  winrate2 = c(l_pre, l_post)
+)
+print(tmp)
+
+# Vizualizáció
+library(ggplot2)
+theme_set(theme_bw())
+ggplot(tmp2, aes(x = Period2, y = winrate2)) +
+  geom_bar(stat="identity", width=0.1, fill=("green")) +
+  labs(title="LIVERPOOL HOME WIN-RATIO ANALYSIS", 
+       subtitle="Pre vs Post COVID-19",
+       caption="Source: understatr.com") +
+  theme(legend.position="none")
+
+# Korfa előkészítés -> MINDEN
+
+all_teams_pre <- covid_true %>%
+  group_by(team_name) %>%
+  count(result) %>%
+  (result=="w")
+  
+teams_winrate <-aggregate(all_teams_pre['n'], by=all_teams_pre['team_name'], sum)
+teams_winrate$gyozelmek <- subset(all_teams_pre, (result=="w"), select= -c(result,team_name))
+teams_winrate$percent <- (teams_winrate$gyozelmek / teams_winrate$n)*100
+teams_winrate$covid <- 0
+
+all_teams_post <- covid_false %>%
+  group_by(team_name) %>%
+  count(result) %>%
+
+teams_winrate_pst <-aggregate(all_teams_post['n'], by=all_teams_post['team_name'], sum)
+# Mivel a Norwich nem nyert ezért ki kell törölnünk, mivel 23 soros az alaphalmazunk, de mivel csak a győzelemket gyűjtük ki az 22.
+teams_winrate_pst <- teams_winrate_pst[-c(16),]
+teams_winrate_pst$gyozelmek <- subset(all_teams_post, (result=="w"), select= -c(result,team_name))
+teams_winrate_pst$percent <- (teams_winrate_pst$gyozelmek / teams_winrate_pst$n)*100
+teams_winrate_pst$covid <- 1
+
+
+allteams_vis <- rbind(teams_winrate,teams_winrate_pst)
+names(allteams_vis)
+allteams_vis$percent <- unlist(allteams_vis$percent)
+allteams_vis$team_name <- unlist(allteams_vis$team_name)
+allteams_vis$covid <- unlist(allteams_vis$covid)
+row.names(allteams_vis) <- NULL
+allteams_vis <- allteams_vis[-c(6),]
+# Korfa vizualizáció
+
+library(ggplot2)
+library(lemon)
+
+ggplot(allteams_vis, aes(x = team_name, fill = covid,
+                 y = ifelse(test = covid == "0",
+                            yes = -percent, no = percent))) + 
+  geom_bar(stat = "identity") +
+  scale_y_continuous(labels = abs, limits = max(allteams_vis$percent) * c(-1,1)) +
+  coord_flip()
+
+
+
+
+# Export
+install.packages("writexl")
+library("writexl")
+write_xlsx(allteams_vis,"adatok_összescsapat.xlsx")
+write_xlsx(allteams_vis,"adatok_liverpool.xlsx")
